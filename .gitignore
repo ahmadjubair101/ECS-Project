@@ -1,21 +1,39 @@
-# IDE
-*.iml
-.idea
-.vscode
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/crash.log
+terraform/crash.*.log
+terraform/*.tfplan
 
-# OS
+# Terraform override files
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# AWS credentials / keys
+.aws/
+*.pem
+*.key
+
+# OS files
 .DS_Store
+Thumbs.db
 
-# JS
-node_modules
+# IDE
+.vscode/
+.idea/
 
 # Go
-/vendor
+*.test
+coverage.out
 
-# Misc
-*.db
-*.db-shm
-*.db-wal
-gatus
-config/config.yml
-config.yaml
+# Logs
+*.log
