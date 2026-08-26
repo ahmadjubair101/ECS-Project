@@ -7,6 +7,11 @@ terraform/crash.log
 terraform/crash.*.log
 terraform/*.tfplan
 
+# AWS / ECS temporary configuration
+task-definition.json
+trust-policy.json
+
+
 # Terraform override files
 terraform/override.tf
 terraform/override.tf.json
