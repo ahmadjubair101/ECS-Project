@@ -26,9 +26,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-              - name: Debug OIDC token
-        uses: github/actions-oidc-debugger@main
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -65,6 +62,9 @@ jobs:
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE"
 
+      - name: Deployment successful
+        run: |
+          echo "Gatus has been successfully deployed to ECS."
       - name: Deployment successful
         run: |
           echo "Gatus has been successfully deployed to ECS."
