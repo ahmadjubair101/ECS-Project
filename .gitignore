@@ -1,11 +1,11 @@
 # Terraform
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfvars
-terraform/crash.log
-terraform/crash.*.log
-terraform/*.tfplan
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+infra/crash.log
+infra/crash.*.log
+infra/*.tfplan
 
 # AWS / ECS temporary configuration
 task-definition.json
@@ -13,10 +13,10 @@ trust-policy.json
 
 
 # Terraform override files
-terraform/override.tf
-terraform/override.tf.json
-terraform/*_override.tf
-terraform/*_override.tf.json
+infra/override.tf
+infra/override.tf.json
+infra/*_override.tf
+infra/*_override.tf.json
 
 # Environment / secrets
 .env
