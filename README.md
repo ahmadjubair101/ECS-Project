@@ -444,7 +444,7 @@ docker --version
 ### 1. Clone the Repository
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/ahmadjubair101/ECS-Project.git
 cd gatus-source
 ```
 
@@ -539,7 +539,7 @@ git --version
 ### 1. Clone the Project
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/ahmadjubair101/ECS-Project.git
 cd gatus-source
 ```
 
@@ -677,7 +677,7 @@ I also check that the custom domain loads over HTTPS and that HTTP redirects cor
 Finally, the deployed health endpoint can be checked with:
 
 ```bash
-curl -fsS -o /dev/null -w '%{http_code}\n' https://<your-domain>/health
+curl -fsS -o /dev/null -w '%{http_code}\n' https://tm.jubair-gatusmonitoringapp.co.uk/health
 ```
 
 A healthy response should return:
