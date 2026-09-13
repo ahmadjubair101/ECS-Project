@@ -1,3 +1,9 @@
 output "github_actions_role_arn" {
-  value = aws_iam_role.github_actions.arn
+  description = "ARN of the GitHub Actions application deployment role"
+  value       = aws_iam_role.github_actions.arn
+}
+
+output "oidc_provider_arn" {
+  description = "ARN of the GitHub Actions OIDC provider"
+  value       = aws_iam_openid_connect_provider.github.arn
 }

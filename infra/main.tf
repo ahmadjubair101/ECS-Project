@@ -75,3 +75,11 @@ module "github_oidc" {
 
   github_oidc_subject = "repo:ahmadjubair101@289809123/ECS-Project@1345149016:ref:refs/heads/main"
 }
+
+module "terraform_ci" {
+  source = "./modules/terraform-ci"
+
+  oidc_provider_arn = module.github_oidc.oidc_provider_arn
+
+  github_oidc_subject = "repo:ahmadjubair101@289809123/ECS-Project@1345149016:ref:refs/heads/main"
+}
