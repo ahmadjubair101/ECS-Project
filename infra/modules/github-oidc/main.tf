@@ -42,7 +42,7 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
       variable = "token.actions.githubusercontent.com:sub"
 
       values = [
-        "repo:ahmadjubair101/ECS-Project:ref:refs/heads/main"
+        var.github_oidc_subject
       ]
     }
   }
@@ -68,10 +68,6 @@ resource "aws_iam_role_policy_attachment" "github_actions_ecs" {
   role       = aws_iam_role.github_actions.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonECS_FullAccess"
 }
-
-
-
-
 
 
 

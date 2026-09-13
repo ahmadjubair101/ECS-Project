@@ -4,13 +4,12 @@ resource "aws_lb" "gatus" {
   load_balancer_type = "application"
 
   security_groups = [
-    aws_security_group.alb.id
+    var.alb_security_group_id
   ]
 
-  subnets = [
-    aws_subnet.public_a.id,
-    aws_subnet.public_b.id
-  ]
+
+  subnets = var.public_subnet_ids
+
 
   tags = {
     Name = "${var.project_name}-alb"
@@ -23,7 +22,8 @@ resource "aws_lb_target_group" "gatus" {
   protocol    = "HTTP"
   target_type = "ip"
 
-  vpc_id = aws_vpc.main.id
+  vpc_id = var.vpc_id
+
 
   health_check {
     enabled             = true
@@ -65,7 +65,7 @@ resource "aws_lb_listener" "https" {
 
   ssl_policy = "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
 
-  certificate_arn = aws_acm_certificate_validation.gatus.certificate_arn
+  certificate_arn = var.certificate_arn
 
   default_action {
     type             = "forward"

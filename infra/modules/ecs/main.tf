@@ -19,7 +19,7 @@ resource "aws_ecs_task_definition" "gatus" {
   cpu    = tostring(var.container_cpu)
   memory = tostring(var.container_memory)
 
-  execution_role_arn = aws_iam_role.ecs_task_execution.arn
+  execution_role_arn = var.ecs_task_execution_role_arn
 
   container_definitions = jsonencode([
     {
@@ -57,7 +57,7 @@ resource "aws_ecs_task_definition" "gatus" {
         logDriver = "awslogs"
 
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.gatus.name
+          awslogs-group         = var.log_group_name
           awslogs-region        = var.aws_region
           awslogs-stream-prefix = "gatus"
         }
@@ -80,28 +80,24 @@ resource "aws_ecs_service" "gatus" {
   launch_type = "FARGATE"
 
   network_configuration {
-    subnets = [
-      aws_subnet.private_a.id,
-      aws_subnet.private_b.id
-    ]
+    subnets = var.private_subnet_ids
+
 
     security_groups = [
-      aws_security_group.ecs.id
+      var.ecs_security_group_id
     ]
+
 
     assign_public_ip = false
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.gatus.arn
+    target_group_arn = var.target_group_arn
     container_name   = var.project_name
     container_port   = var.container_port
   }
 
-  depends_on = [
-    aws_lb_listener.https,
-    aws_iam_role_policy_attachment.ecs_task_execution
-  ]
+
 
   tags = {
     Name = "${var.project_name}-service"
