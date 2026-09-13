@@ -126,72 +126,93 @@ This was useful because a task showing as "running" in ECS doesn't necessarily m
 
 ### Infrastructure as Code
 
-The AWS infrastructure is defined in Terraform.
+The AWS infrastructure is managed with Terraform and split into reusable modules for networking, security, IAM, ECS, the Application Load Balancer, ACM, Route 53, CloudWatch and GitHub OIDC.
 
-This was a big improvement over relying on resources I'd created manually in the AWS Console because I could see the infrastructure as code and reproduce it much more easily.
+The root Terraform configuration connects these modules together rather than defining every AWS resource in one large configuration.
 
-### Automated Deployment
+During the refactor from flat Terraform files to modules, I used Terraform `moved` blocks so existing resources could be moved to their new module addresses without being destroyed and recreated.
 
-GitHub Actions handles the application deployment.
+Terraform state is stored remotely in an encrypted Amazon S3 backend rather than being kept only on my local machine.
 
-When the deployment workflow runs from `main`, it builds the Docker image, pushes it to ECR and triggers a new ECS deployment.
+The state bucket has:
 
-### OIDC Authentication
+* S3 versioning enabled
+* server-side encryption enabled
+* public access blocked
+* Terraform state locking enabled
 
-I used GitHub OIDC to authenticate the deployment workflow to AWS.
+This gives the local Terraform workflow and GitHub Actions a shared source of truth for the infrastructure and prevents multiple Terraform operations from modifying the state at the same time.
 
-This means I don't need to keep permanent AWS access keys in GitHub for the pipeline.
-
----
 
 ## Project Layout
 
-The main parts of the project are organised like this:
+I separated the application, infrastructure and automation so each part of the project has a clear responsibility.
 
 ```text
-gatus-source/
+ECS-Project/
 │
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml
+│       ├── deploy.yml
+│       └── terraform.yml
+│
+├── app/
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── Makefile
+│   ├── config.yaml
+│   ├── go.mod
+│   ├── go.sum
+│   ├── main.go
+│   └── ...Gatus source code
 │
 ├── docs/
 │   └── screenshots/
-│       ├── Gatus Architecture.png
-│       ├── Gatus Dashboard.png
-│       ├── Gatus Targets.png
-│       └── Gatus-Service ECS.png
 │
 ├── infra/
-│   ├── .terraform.lock.hcl
-│   ├── acm.tf
-│   ├── alb.tf
-│   ├── cloudwatch.tf
-│   ├── ecs.tf
-│   ├── github-oidc.tf
-│   ├── iam.tf
-│   ├── nat.tf
+│   ├── bootstrap/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── modules/
+│   │   ├── alb/
+│   │   ├── certificate/
+│   │   ├── dns/
+│   │   ├── ecs/
+│   │   ├── github-oidc/
+│   │   ├── iam/
+│   │   ├── monitoring/
+│   │   ├── networking/
+│   │   ├── security/
+│   │   └── terraform-ci/
+│   │
+│   ├── main.tf
+│   ├── moved.tf
 │   ├── outputs.tf
 │   ├── provider.tf
 │   ├── route53.tf
-│   ├── security-groups.tf
 │   ├── variables.tf
 │   ├── versions.tf
-│   └── vpc.tf
+│   └── .terraform.lock.hcl
 │
-├── Dockerfile
-├── .dockerignore
 ├── .gitignore
-├── config.yaml
-├── go.mod
-├── go.sum
-├── main.go
+├── LICENSE
 └── README.md
 ```
 
-The rest of the repository contains the upstream Gatus source used to build the application.
+The application and its Docker build context live inside `app/`, while all AWS infrastructure is managed from `infra/`.
 
-I moved all of my Terraform into `infra/` so there's a clear separation between the application and the AWS infrastructure I've added around it.
+Terraform is split into reusable modules rather than keeping every resource in a single flat configuration. The root module connects the individual components together and passes outputs between modules.
+
+The `bootstrap/` configuration is kept separate because it creates the S3 bucket used by Terraform's own remote backend.
+
+There are also two separate GitHub Actions workflows:
+
+* `deploy.yml` handles application delivery by building the Docker image, pushing it to Amazon ECR and updating the ECS service.
+* `terraform.yml` handles infrastructure changes by running Terraform formatting, validation, planning and apply steps.
+
+This keeps application deployment and infrastructure deployment separate instead of giving one workflow responsibility for everything.
 
 ---
 
@@ -344,42 +365,67 @@ Container logs are sent to CloudWatch using the `awslogs` log driver.
 
 ---
 
+
 ## CI/CD
 
-The deployment workflow is stored in:
+I use two separate GitHub Actions workflows so application deployment and infrastructure deployment are handled independently.
+
+### Application Deployment
+
+The application deployment workflow is stored in:
 
 ```text
 .github/workflows/deploy.yml
 ```
 
-It runs when changes are pushed to `main`.
+When changes are pushed to `main`, the workflow:
 
-The pipeline looks like this:
+1. Checks out the repository.
+2. Authenticates to AWS using GitHub OIDC.
+3. Logs in to Amazon ECR.
+4. Builds the Docker image from the `app/` directory.
+5. Tags the image with both the Git commit SHA and `latest`.
+6. Pushes both tags to Amazon ECR.
+7. Forces a new deployment of the ECS service.
+8. Waits for the ECS service to become stable before completing.
+
+This removes the need to manually build and push images or restart the ECS service after application changes.
+
+### Terraform Infrastructure Deployment
+
+The Terraform workflow is stored in:
 
 ```text
-Push to main
-     |
-     v
-GitHub Actions
-     |
-     v
-Authenticate to AWS with OIDC
-     |
-     v
-Login to ECR
-     |
-     v
-Build Docker Image
-     |
-     v
-Push Image to ECR
-     |
-     v
-Trigger New ECS Deployment
-     |
-     v
-Wait for ECS to Stabilise
+.github/workflows/terraform.yml
 ```
+
+It runs when infrastructure files under `infra/` change on the `main` branch, and it can also be started manually.
+
+The workflow runs:
+
+```text
+terraform fmt -check -recursive
+terraform init -input=false
+terraform validate
+terraform plan -input=false -out=tfplan
+terraform apply -input=false -auto-approve tfplan
+```
+
+This means infrastructure changes are validated and planned before Terraform applies them to AWS.
+
+### GitHub OIDC Authentication
+
+Both workflows authenticate to AWS using GitHub OIDC instead of storing permanent AWS access keys as GitHub secrets.
+
+I use separate IAM roles for the two workflows:
+
+* The application deployment role has the permissions required to push images to ECR and update the ECS service.
+* The Terraform role has the permissions required to manage the AWS infrastructure defined in Terraform.
+
+Keeping these roles separate means the application deployment workflow does not need the wider infrastructure permissions required by Terraform.
+
+The OIDC trust policies are restricted to the repository's `main` branch, so the roles cannot be assumed by unrelated repositories or branches.
+
 
 ### Image Tagging
 
@@ -445,7 +491,7 @@ docker --version
 
 ```bash
 git clone https://github.com/ahmadjubair101/ECS-Project.git
-cd gatus-source
+cd ECS-Project
 ```
 
 ### 2. Build the Docker Image
@@ -453,7 +499,7 @@ cd gatus-source
 From the root of the project:
 
 ```bash
-docker build -t gatus .
+docker build -t gatus ./app
 ```
 
 You can check the image was created with:
@@ -507,7 +553,7 @@ Because I started it with `--rm`, Docker removes the container after it stops.
 If I change the application or configuration, I can simply rebuild and run it again:
 
 ```bash
-docker build -t gatus .
+docker build -t gatus ./app
 docker run --rm -p 8080:8080 --name gatus-local gatus
 ```
 
@@ -540,7 +586,7 @@ git --version
 
 ```bash
 git clone https://github.com/ahmadjubair101/ECS-Project.git
-cd gatus-source
+cd ECS-Project
 ```
 
 ### 2. Test Gatus Locally
@@ -548,7 +594,7 @@ cd gatus-source
 Before touching AWS, make sure the image works:
 
 ```bash
-docker build -t gatus .
+docker build -t gatus ./app
 docker run --rm -p 8080:8080 gatus
 ```
 
@@ -557,14 +603,51 @@ Then:
 ```bash
 curl http://localhost:8080/health
 ```
+### 3. Create the Terraform Remote Backend
 
-### 3. Configure Terraform
+Terraform state for the main infrastructure is stored remotely in Amazon S3.
 
-Move into the infrastructure directory:
+The backend resources are managed separately inside:
+
+```text
+infra/bootstrap/
+```
+
+For a first-time deployment, move into the bootstrap directory:
 
 ```bash
-cd infra
+cd infra/bootstrap
 ```
+
+Initialise Terraform:
+
+```bash
+terraform init
+```
+
+Review the resources that will be created:
+
+```bash
+terraform plan
+```
+
+Then create the S3 backend:
+
+```bash
+terraform apply
+```
+
+The backend bucket is configured with versioning, server-side encryption and public access blocking.
+
+After the backend exists, return to the main Terraform directory:
+
+```bash
+cd ..
+```
+
+> The S3 backend bucket name must be globally unique. When reproducing this project in another AWS account, update the bucket name in the bootstrap configuration and the S3 backend configuration in `versions.tf`.
+
+### 4. Configure Terraform Variables
 
 Create:
 
@@ -572,49 +655,55 @@ Create:
 terraform.tfvars
 ```
 
-and provide the values required by `variables.tf`.
+inside the `infra/` directory and provide the values required by `variables.tf`.
 
-I keep `terraform.tfvars` out of Git because it's environment-specific and shouldn't be part of the public repository.
+I keep `terraform.tfvars` out of Git because it can contain environment-specific values and should not be committed to the public repository.
 
-### 4. Initialise Terraform
+### 5. Initialise the Main Terraform Configuration
+
+From inside `infra/`, run:
 
 ```bash
 terraform init
 ```
 
-### 5. Check the Terraform
+Terraform will initialise the AWS provider, download the required modules and connect to the S3 remote backend.
 
-Format the files:
+### 6. Validate the Terraform
+
+Check the formatting:
 
 ```bash
-terraform fmt -recursive
+terraform fmt -check -recursive
 ```
 
-Then validate them:
+Validate the configuration:
 
 ```bash
 terraform validate
 ```
 
-### 6. Review the Plan
+Then review the infrastructure changes:
 
 ```bash
 terraform plan
 ```
 
-I always review the plan before applying it so I can see what Terraform is about to create or change.
+I review the plan before applying it so I can confirm exactly what Terraform is going to create, update or remove.
 
 ### 7. Apply the Infrastructure
+
+Apply the reviewed Terraform configuration:
 
 ```bash
 terraform apply
 ```
 
-Review the plan again and confirm the apply.
+Terraform provisions the networking, security, IAM, ACM certificate, Application Load Balancer, ECS resources, monitoring, DNS and GitHub OIDC configuration through the modules under `infra/modules/`.
 
 ### 8. Configure the GitHub Repository
 
-The deployment workflow uses these GitHub repository variables:
+The application deployment workflow uses these GitHub repository variables:
 
 ```text
 AWS_REGION
@@ -625,35 +714,67 @@ ECS_SERVICE
 CONTAINER_NAME
 ```
 
-They tell the workflow which AWS region, IAM role, ECR repository and ECS resources to use.
+These identify the AWS region, GitHub Actions IAM role, ECR repository and ECS resources used by the application deployment pipeline.
 
-### 9. Deploy
+There are two IAM roles used by GitHub Actions:
 
-Once everything is configured, push the application changes to `main`.
+* an application deployment role for pushing images to ECR and updating ECS
+* a Terraform role for managing the infrastructure
 
-GitHub Actions then:
+Both workflows use GitHub OIDC, so permanent AWS access keys do not need to be stored in GitHub.
+
+### 9. Automated Deployments
+
+There are two separate deployment workflows.
+
+#### Application Changes
+
+When application changes are pushed to `main`, `deploy.yml`:
 
 ```text
-Authenticates to AWS
+Authenticates to AWS using OIDC
         |
         v
-Logs into ECR
+Logs into Amazon ECR
         |
         v
-Builds the Docker image
+Builds the image from app/
         |
         v
-Tags it with SHA + latest
+Tags it with the commit SHA + latest
         |
         v
-Pushes both tags to ECR
+Pushes both image tags to ECR
         |
         v
 Triggers a new ECS deployment
         |
         v
-Waits for the service to stabilise
+Waits for the ECS service to become stable
 ```
+
+#### Infrastructure Changes
+
+When Terraform files under `infra/` change on `main`, `terraform.yml` runs:
+
+```text
+Terraform format check
+        |
+        v
+Terraform init
+        |
+        v
+Terraform validate
+        |
+        v
+Terraform plan
+        |
+        v
+Terraform apply
+```
+
+The Terraform workflow can also be started manually through GitHub Actions.
+
 
 ### 10. Verify It
 
@@ -726,7 +847,7 @@ One thing I had to keep in mind is that a small workload doesn't necessarily mea
 
 The NAT Gateway has an hourly cost as well as data processing charges, and the Application Load Balancer also costs money while it's running.
 
-For a learning project like this, destroying infrastructure when I'm no longer using it is an important part of keeping the AWS bill under control.
+For a project like this, destroying infrastructure when I'm no longer using it is an important part of keeping the AWS bill under control.
 
 ---
 
@@ -764,13 +885,13 @@ The ALB then communicates with Gatus over HTTP on port `8080`.
 
 That keeps the setup simpler for this project. In an environment with stricter security requirements, encryption between the ALB and the application could also be considered.
 
-### CI/CD Doesn't Run Tests Yet
+### CI/CD Testing and Security Scanning
 
-The current workflow builds the Docker image, pushes it to ECR and deploys it.
+The project now has separate GitHub Actions workflows for application deployment and Terraform infrastructure changes.
 
-It doesn't currently have a separate automated test or security scanning stage.
+The application pipeline does not currently include an automated test or container security scanning stage, and the Terraform pipeline does not yet include dedicated IaC security scanning.
 
-That's something I'd add before treating the pipeline as production-ready.
+These would be useful additions before treating the pipelines as production-ready.
 
 ---
 
@@ -778,49 +899,51 @@ That's something I'd add before treating the pipeline as production-ready.
 
 There are a few things I'd like to add if I take the project further:
 
-- Run more than one ECS task for better availability
-- Add a NAT Gateway per Availability Zone
-- Add automated tests before deployment
-- Validate Terraform through GitHub Actions
-- Scan Docker images for vulnerabilities
-- Add Terraform security scanning
-- Add CloudWatch alarms
-- Add notifications for deployment or application failures
-- Separate development and production environments
-- Move Terraform state to a remote backend
-- Add infrastructure plan checks before Terraform changes are applied
+* Run more than one ECS task for better availability
+* Add a NAT Gateway per Availability Zone
+* Add automated application tests before deployment
+* Scan Docker images for vulnerabilities
+* Add Terraform security scanning
+* Add CloudWatch alarms
+* Add notifications for deployment or application failures
+* Separate development and production environments
+* Add an approval stage before Terraform applies infrastructure changes
 
-I haven't added these just to make the project look more complicated. They're things I'd look at next based on the limitations of the current setup.
+These would improve the availability, security and deployment controls of the project without changing the core architecture I've already built.
 
 ---
+
 
 ## Keeping Local Files Out of Git
 
-Terraform creates a few files locally that I don't want in the repository.
+Terraform creates local working files, state files and variable files that shouldn't be committed to the repository.
 
-My `.gitignore` excludes:
+My `.gitignore` excludes these recursively across the project:
 
 ```text
-infra/.terraform/
-infra/*.tfstate
-infra/*.tfstate.*
-infra/*.tfvars
-infra/*.tfplan
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfplan
 ```
 
-Terraform state is especially important to keep out of a public repository because it can contain details about the infrastructure and potentially sensitive values.
+Terraform state is especially important to keep out of a public repository because it can contain infrastructure details and potentially sensitive values.
 
-I do commit:
+I do commit the Terraform lock files:
 
 ```text
 infra/.terraform.lock.hcl
+infra/bootstrap/.terraform.lock.hcl
 ```
 
-because the lock file helps keep the Terraform provider versions consistent.
+These keep the provider versions consistent between local development and GitHub Actions.
 
-I also exclude environment files, AWS credentials, private keys and local IDE files.
+I also exclude environment files, AWS credentials, private keys, logs and local IDE files.
 
 ---
+
 
 ## What I Learned
 
@@ -832,9 +955,9 @@ The networking was probably the part I learned the most from. I had to understan
 
 Health checks were another useful lesson. A running ECS task doesn't automatically mean the application is working. Having both the container health check and ALB health check helped me see the difference.
 
-Terraform also made a big difference to how I approached the infrastructure. Once the setup was defined in code, it became much easier to see what I'd actually built instead of having resources spread across different pages in the AWS Console.
+Terraform also changed how I approached the infrastructure. I started with a flatter Terraform setup and then refactored it into reusable modules for areas like networking, security, ECS and the ALB. I also moved the state into an S3 remote backend, which helped me understand why state management matters when Terraform is being run from more than one place.
 
-The CI/CD part brought everything together. Instead of manually rebuilding the image, pushing it to ECR and restarting ECS every time, GitHub Actions now handles that deployment flow for me.
+The CI/CD part brought everything together. I now have separate GitHub Actions workflows for application and infrastructure changes. One handles building the Docker image, pushing it to ECR and deploying to ECS, while the other validates, plans and applies Terraform changes. Both authenticate to AWS through OIDC instead of relying on permanent AWS access keys.
 
 More than anything, this project helped me understand the full path from code running on my machine to a containerised application running privately in AWS and being served securely over a custom domain.
 
